@@ -1187,10 +1187,11 @@ presubmit: {
 
 func TestParserConfigs(t *testing.T) {
 	inputs := []struct {
-		name   string
-		in     string
-		config Config
-		out    string
+		name    string
+		in      string
+		config  Config
+		out     string
+		wantErr string
 	}{{
 		name: "AlreadyExpandedConfigOff",
 		in: `presubmit: {
@@ -1334,6 +1335,105 @@ func TestParserConfigs(t *testing.T) {
   }
 }
 `,
+	}, {
+		name: "SortBySpecifiedFieldOrder",
+		in: `presubmit: {
+  unmoved_not_in_config: "foo"
+  check_contents: {
+    x_third: "3"
+    # attached to EDIT
+    z_first: EDIT
+    unknown_bubbles_to_top: true
+    x_second: true
+    z_first: ADD
+    also_unknown_bubbles_to_top: true
+  }
+  # Should also not move
+  unmoved_not_in_config: "bar"
+}
+`,
+		config: Config{
+			fieldSortOrder: map[string]map[string]int{
+				"check_contents": makePriorities("z_first", "x_second", "x_third"),
+			},
+		},
+		// Nodes are sorted by the specified order, else left untouched.
+		out: `presubmit: {
+  unmoved_not_in_config: "foo"
+  check_contents: {
+    unknown_bubbles_to_top: true
+    also_unknown_bubbles_to_top: true
+    # attached to EDIT
+    z_first: EDIT
+    z_first: ADD
+    x_second: true
+    x_third: "3"
+  }
+  # Should also not move
+  unmoved_not_in_config: "bar"
+}
+`,
+	}, {
+		name: "SortBySpecifiedFieldOrderAndNameAndValue",
+		in: `presubmit: {
+  # attached to bar
+  sort_by_name_and_value: "bar"
+  check_contents: {
+    x_third: "3"
+    # attached to EDIT
+    z_first: EDIT
+    unknown_bubbles_to_top: true
+    x_second: true
+    z_first: ADD
+    also_unknown_bubbles_to_top: true
+  }
+  sort_by_name_and_value: "foo"
+}
+`,
+		config: Config{
+			fieldSortOrder: map[string]map[string]int{
+				"check_contents": makePriorities("z_first", "x_second", "x_third"),
+			},
+			SortFieldsByFieldName:       true,
+			SortRepeatedFieldsByContent: true,
+		},
+		// Nodes are sorted by name/value first, then by the specified order. Hence the specified
+		// repeated fields (z_first) is also sorted by value rather than in original order.
+		out: `presubmit: {
+  check_contents: {
+    also_unknown_bubbles_to_top: true
+    unknown_bubbles_to_top: true
+    z_first: ADD
+    # attached to EDIT
+    z_first: EDIT
+    x_second: true
+    x_third: "3"
+  }
+  # attached to bar
+  sort_by_name_and_value: "bar"
+  sort_by_name_and_value: "foo"
+}
+`,
+	}, {
+		name: "SortBySpecifiedFieldOrderErrorHandling",
+		in: `presubmit: {
+  node_not_in_config_will_not_trigger_error: true
+  check_contents: {
+    x_third: "3"
+    z_first: EDIT
+    unknown_field_triggers_error: true
+    x_second: true
+    z_first: ADD
+  }
+}
+`,
+		config: Config{
+			fieldSortOrder: map[string]map[string]int{
+				"check_contents": makePriorities("z_first", "x_second", "x_third"),
+			},
+			RequireFieldSortOrderToMatchAllFieldsInNode: true,
+		},
+		wantErr: "check_contents.unknown_field_triggers_error",
 	}, {
 		name: "RemoveRepeats",
 		in: `presubmit: {
@@ -1699,6 +1799,16 @@ foo: '"bar"'
 	// Test FormatWithConfig with inputs.
 	for _, input := range inputs {
 		got, err := FormatWithConfig([]byte(input.in), input.config)
+		if input.wantErr != "" {
+			if err == nil {
+				t.Errorf("FormatWithConfig[%s] got err=nil, want err=%v", input.name, input.wantErr)
+				continue
+			}
+			if !strings.Contains(err.Error(), input.wantErr) {
+				t.Errorf("FormatWithConfig[%s] got err=%v, want err=%v", input.name, err, input.wantErr)
+			}
+			continue
+		}
 		if err != nil {
 			t.Errorf("FormatWithConfig[%s] %v with config %v returned err %v", input.name, input.in, input.config, err)
 			continue
@@ -1710,6 +1820,16 @@ foo: '"bar"'
 	// Test ParseWithConfig with inputs.
 	for _, input := range inputs {
 		nodes, err := ParseWithConfig([]byte(input.in), input.config)
+		if input.wantErr != "" {
+			if err == nil {
+				t.Errorf("ParseWithConfig[%s] got err=nil, want err=%v", input.name, input.wantErr)
+				continue
+			}
+			if !strings.Contains(err.Error(), input.wantErr) {
+				t.Errorf("ParseWithConfig[%s] got err=%v, want err=%v", input.name, err, input.wantErr)
+			}
+			continue
+		}
 		if err != nil {
 			t.Errorf("ParseWithConfig[%s] %v with config %v returned err %v", input.name, input.in, input.config, err)
 			continue
